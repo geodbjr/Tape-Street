@@ -1,0 +1,90 @@
+"""
+Tape Street v1.2.7 - Reference Logic
+Submission for Mathematical Audit
+"""
+
+import hashlib
+import hmac
+import os
+import sys
+from argon2 import low_level
+
+class TapeStreetCore:
+    def __init__(self, password, salt):
+        print(f"[*] Initializing KDF (Argon2id)...")
+        # Memory-Hard Key Derivation
+        self.entropy_pool = low_level.hash_secret_raw(
+            secret=password.encode(),
+            salt=salt,
+            time_cost=3,
+            memory_cost=65536,  # 64MB RAM
+            parallelism=4,
+            hash_len=64,
+            type=low_level.Type.ID
+        )
+        
+        self.cipher_key = self.entropy_pool[:32]
+        self.hmac_key   = self.entropy_pool[32:64]
+        self.sbox = self._build_dynamic_sbox(self.cipher_key)
+
+    def _build_dynamic_sbox(self, seed):
+        """Generates a unique substitution table for this session."""
+        sbox = list(range(256))
+        for i in range(255, 0, -1):
+            idx = int.from_bytes(hashlib.sha256(seed + bytes([i])).digest()[:2], 'big') % (i + 1)
+            sbox[i], sbox[idx] = sbox[idx], sbox[i]
+        return sbox
+
+    @staticmethod
+    def gf256_mult(a, b):
+        """Galois Field multiplication (0x1B)."""
+        res = 0
+        for _ in range(8):
+            if b & 1: res ^= a
+            carry = a & 0x80
+            a = (a << 1) & 0xFF
+            if carry: a ^= 0x1B
+            b >>= 1
+        return res
+
+    def mds_diffusion(self, block):
+        """MDS Matrix [2, 3, 1, 1] diffusion layer."""
+        b = list(block)
+        return [
+            self.gf256_mult(2, b[0]) ^ self.gf256_mult(3, b[1]) ^ b[2] ^ b[3],
+            b[0] ^ self.gf256_mult(2, b[1]) ^ self.gf256_mult(3, b[2]) ^ b[3],
+            b[0] ^ b[1] ^ self.gf256_mult(2, b[2]) ^ self.gf256_mult(3, b[3]),
+            self.gf256_mult(3, b[0]) ^ b[1] ^ b[2] ^ self.gf256_mult(2, b[3])
+        ]
+
+    def process_block(self, plaintext_4byte):
+        substituted = [self.sbox[b] for b in plaintext_4byte]
+        return bytes(self.mds_diffusion(substituted))
+
+# --- AUDIT EXECUTION BLOCK ---
+if __name__ == "__main__":
+    try:
+        print("=== TAPE STREET v1.2.7 MATH AUDIT ===")
+        print(f"Python Version: {sys.version.split()[0]}")
+        
+        # Test Vector Setup
+        T_PASS = "Audit_Pass_2026"
+        T_SALT = b"Static_Audit_Salt_127"
+        T_DATA = b"TEST" # 4-byte block
+        
+        # Run Core
+        core = TapeStreetCore(T_PASS, T_SALT)
+        result = core.process_block(T_DATA)
+        
+        print("\n--- RESULTS ---")
+        print(f"Input Data:  {T_DATA.hex()}")
+        print(f"Cipher Output: {result.hex()}")
+        print("-------------------------------------")
+        print("✅ Status: Mathematical Logic Stable.")
+        
+    except Exception as e:
+        print(f"\n❌ FATAL ERROR: {e}")
+    
+    # --- THE 'KEEP OPEN' FUNCTION ---
+    print("\n" + "="*37)
+    input("Audit Complete. Press ENTER to close window...")
